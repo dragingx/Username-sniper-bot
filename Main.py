@@ -3,7 +3,6 @@ import random
 import string
 import time
 import threading
-import queue
 import math
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -11,10 +10,10 @@ from concurrent.futures import ThreadPoolExecutor
 # =========================
 # ====== CONFIG ==========
 # =========================
-NAMES_TO_FIND = 30        # total usernames to find
-LENGTHS = [3, 4, 5]       # only 3–5 letter usernames
-WORKER_THREADS = 8        # adjust for your hosting environment
-CHECK_SLEEP = 0.05        # delay per thread
+NAMES_TO_FIND = 300000        # total usernames to find
+LENGTHS = [3, 4, 5]           # only 3–5 letter usernames
+WORKER_THREADS = 8            # adjust for your hosting environment
+CHECK_SLEEP = 0.05            # delay per thread
 
 VALID_FILE = "valid.txt"
 LOG_FILE = "scan_log.txt"
@@ -22,14 +21,13 @@ LOG_FILE = "scan_log.txt"
 BIRTHDAY = "1999-04-20"
 ROBLOX_VALIDATE_URL = "https://auth.roblox.com/v1/usernames/validate"
 
-WEBHOOK_URL = "https://discord.com/api/webhooks/1438733086018769029/asmfHVOleykXH6ruhIT5YEhBu90bvwFXgso2dVIB5tQH9yFcJMO8oK-u5D4D4wKMC4eH"   # <--- your webhook
+WEBHOOK_URL = "https://discord.com/api/webhooks/1438733086018769029/asmfHVOleykXH6ruhIT5YEhBu90bvwFXgso2dVIB5tQH9yFcJMO8oK-u5D4D4wKMC4eH"
 WEBHOOK_NAME = "Username Scanner"
 WEBHOOK_AVATAR = None
 
 EMBED_UPDATE_INTERVAL = 1.0
 PAGE_SIZE = 18
 MAX_EMBED_DESC = 1900
-MIN_EDIT_INTERVAL = 0.6
 
 # =========================
 # ====== GLOBALS =========
@@ -42,7 +40,6 @@ stop_event = threading.Event()
 last_username = ""
 last_status = ""
 message_id = None
-update_queue = queue.Queue()
 current_page_index = 0
 
 # =========================
@@ -69,44 +66,6 @@ def check_username(username):
     except Exception as e:
         log(f"Network error for {username}: {e}")
         return None
-
-# =========================
-# ====== WORKER THREAD ====
-# =========================
-def worker_thread(thread_id):
-    global checked_counter, last_username, last_status
-    attempts = 0
-    while not stop_event.is_set():
-        with checked_lock:
-            if len(found_usernames) >= NAMES_TO_FIND:
-                break
-            checked_counter += 1
-            checked_now = checked_counter
-        length = random.choice(LENGTHS)
-        username = make_username(length)
-        attempts += 1
-
-        code = check_username(username)
-        if code == 0:
-            with found_lock:
-                if username not in found_usernames:
-                    found_usernames.append(username)
-                    with open(VALID_FILE, "a+", encoding="utf-8") as vf:
-                        vf.write(username + "\n")
-            last_status = "available"
-            log(f"[FOUND] {username}")
-            update_queue.put(("found", username, checked_now))
-        elif code is None:
-            last_status = "network-error"
-            log(f"[NET ERR] {username}")
-            update_queue.put(("error", username, checked_now))
-        else:
-            last_status = "taken"
-            log(f"[TAKEN] {username}")
-            update_queue.put(("checked", username, checked_now))
-
-        last_username = username
-        time.sleep(CHECK_SLEEP)
 
 # =========================
 # ====== PROGRESS BAR =====
@@ -206,6 +165,48 @@ def upload_logs():
         for f in list(files_payload.values()):
             try: f.close()
             except: pass
+
+# =========================
+# ====== WORKER THREAD ====
+# =========================
+def worker_thread(thread_id):
+    global checked_counter, last_username, last_status, current_page_index
+    while not stop_event.is_set():
+        with checked_lock:
+            if len(found_usernames) >= NAMES_TO_FIND:
+                break
+            checked_counter += 1
+            checked_now = checked_counter
+
+        length = random.choice(LENGTHS)
+        username = make_username(length)
+        code = check_username(username)
+
+        if code == 0:
+            with found_lock:
+                if username not in found_usernames:
+                    found_usernames.append(username)
+                    with open(VALID_FILE, "a+", encoding="utf-8") as vf:
+                        vf.write(username + "\n")
+            last_status = "available"
+            log(f"[FOUND] {username}")
+
+            # PATCH EMBED IMMEDIATELY
+            with found_lock:
+                fcount = len(found_usernames)
+            with checked_lock:
+                ccount = checked_counter
+            patch_embeds(fcount, ccount, username, "available", page_idx=current_page_index)
+
+        elif code is None:
+            last_status = "network-error"
+            log(f"[NET ERR] {username}")
+        else:
+            last_status = "taken"
+            log(f"[TAKEN] {username}")
+
+        last_username = username
+        time.sleep(CHECK_SLEEP)
 
 # =========================
 # ====== DASHBOARD =======
