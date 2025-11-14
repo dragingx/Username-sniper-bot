@@ -20,9 +20,9 @@ LOG_FILE = "scan_log.txt"
 BIRTHDAY = "1999-04-20"
 ROBLOX_VALIDATE_URL = "https://auth.roblox.com/v1/usernames/validate"
 
-WEBHOOK_URL = "https://discord.com/api/webhooks/1438743584084988055/MKcQvd5UOc6RgPVBlBxG3WMNQD8XakPChLjpgkjbBeuKqko2zDsm-HNtv2dL7jU7ohfD"  # <-- replace with your webhook
-WEBHOOK_NAME = "Username Scanner"
-WEBHOOK_AVATAR = None
+# Using your webhook
+WEBHOOK_URL = "https://discord.com/api/webhooks/1438746345669398638/D04CCzQ689QlnZzrx2pUHeEoniyORaGmSqVkwlVp_dvQfKY7o-xm4JbYG1lKprxFyHtf"
+WEBHOOK_NAME = None  # optional: leave None to use default webhook name
 
 # =========================
 # ===== GLOBALS ==========
@@ -63,37 +63,15 @@ def check_username(username):
 # =========================
 # ===== WEBHOOK ==========
 # =========================
-def send_initial_message():
-    payload = {
-        "embeds": [
-            {"title": "🔍 Username Scanner", "description": "Scan started...", "color": 0x3498db}
-        ]
-    }
+def send_message(message):
+    """Send a plain Discord message through webhook."""
+    payload = {"content": message}
     if WEBHOOK_NAME:
         payload["username"] = WEBHOOK_NAME
-    if WEBHOOK_AVATAR:
-        payload["avatar_url"] = WEBHOOK_AVATAR
-    try:
-        requests.post(WEBHOOK_URL, json=payload)
-        log("Initial scan message sent.")
-    except Exception as e:
-        log("Failed to send initial embed: " + str(e))
-
-def send_username(username):
-    """Send a small embed just containing the found username."""
-    payload = {
-        "embeds": [
-            {"title": f"✅ Found Username", "description": f"`{username}`", "color": 0x2ecc71}
-        ]
-    }
-    if WEBHOOK_NAME:
-        payload["username"] = WEBHOOK_NAME
-    if WEBHOOK_AVATAR:
-        payload["avatar_url"] = WEBHOOK_AVATAR
     try:
         requests.post(WEBHOOK_URL, json=payload)
     except Exception as e:
-        log("Failed to send username embed: " + str(e))
+        log("Failed to send webhook message: " + str(e))
 
 # =========================
 # ===== WORKER THREAD =====
@@ -105,7 +83,6 @@ def worker_thread(thread_id, target_count):
             if len(found_usernames) >= target_count:
                 break
             checked_counter += 1
-            checked_now = checked_counter
 
         length = random.choice(LENGTHS)
         username = make_username(length)
@@ -120,7 +97,7 @@ def worker_thread(thread_id, target_count):
             last_status = "available"
             last_username = username
             log(f"[FOUND] {username}")
-            send_username(username)  # send individual username immediately
+            send_message(f"✅ Found Username: `{username}`")  # plain message
         elif code is None:
             last_status = "network-error"
             last_username = username
@@ -139,10 +116,11 @@ def start_scan():
     if stop_event.is_set():
         stop_event.clear()
     for f in [VALID_FILE, LOG_FILE]:
-        if os.path.exists(f): os.remove(f)
+        if os.path.exists(f):
+            os.remove(f)
 
     log("Scan starting...")
-    send_initial_message()
+    send_message("🔍 Username Scanner Started!")  # opening message
 
     with ThreadPoolExecutor(max_workers=WORKER_THREADS) as executor:
         futures = [executor.submit(worker_thread, i, NAMES_TO_FIND) for i in range(WORKER_THREADS)]
@@ -158,11 +136,13 @@ def start_scan():
         time.sleep(0.5)
 
     log("Scan finished.")
+    send_message(f"✅ Scan Finished! Found {len(found_usernames)} usernames.")
 
 # =========================
 # ===== ENTRY POINT =======
 # =========================
-if __name__=="__main__":
-    if not WEBHOOK_URL or "YOUR_WEBHOOK_HERE" in WEBHOOK_URL:
+if __name__ == "__main__":
+    if not WEBHOOK_URL:
         print("ERROR: Please set WEBHOOK_URL before running.")
     else:
+        start_scan()
