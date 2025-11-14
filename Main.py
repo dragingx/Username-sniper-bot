@@ -10,10 +10,10 @@ from concurrent.futures import ThreadPoolExecutor
 # =========================
 # ====== CONFIG ==========
 # =========================
-NAMES_TO_FIND = 300000        # total usernames to find
-LENGTHS = [3, 4, 5]           # only 3–5 letter usernames
-WORKER_THREADS = 8            # adjust for your hosting environment
-CHECK_SLEEP = 0.05            # delay per thread
+NAMES_TO_FIND = 300000       # total usernames to find
+LENGTHS = [3, 4, 5]          # only 3–5 letter usernames
+WORKER_THREADS = 8           # adjust for your hosting environment
+CHECK_SLEEP = 0.05           # delay per thread
 
 VALID_FILE = "valid.txt"
 LOG_FILE = "scan_log.txt"
@@ -21,11 +21,10 @@ LOG_FILE = "scan_log.txt"
 BIRTHDAY = "1999-04-20"
 ROBLOX_VALIDATE_URL = "https://auth.roblox.com/v1/usernames/validate"
 
-WEBHOOK_URL = "https://discord.com/api/webhooks/1438733086018769029/asmfHVOleykXH6ruhIT5YEhBu90bvwFXgso2dVIB5tQH9yFcJMO8oK-u5D4D4wKMC4eH"
+WEBHOOK_URL = "https://discord.com/api/webhooks/1438742305904398376/pIIR53lJZXDUCnhxVnjyQZtYPkvHMs4joBmZW6AltyZ053A_l0j3IozUCWgena6MZOdi"  # <-- Replace with your webhook
 WEBHOOK_NAME = "Username Scanner"
 WEBHOOK_AVATAR = None
 
-EMBED_UPDATE_INTERVAL = 1.0
 PAGE_SIZE = 18
 MAX_EMBED_DESC = 1900
 
@@ -39,7 +38,6 @@ checked_lock = threading.Lock()
 stop_event = threading.Event()
 last_username = ""
 last_status = ""
-message_id = None
 current_page_index = 0
 
 # =========================
@@ -82,33 +80,8 @@ def make_progress_bar(current, total, size=20):
 # =========================
 # ====== WEBHOOK =========
 # =========================
-def send_initial_embeds():
-    global message_id
-    payload = {
-        "embeds": [
-            {"title": "🔍 Username Scanner", "description": "Starting scan...", "color": 0x3498db},
-            {"title": "📜 Found Usernames", "description": "None yet.", "color": 0x2ecc71}
-        ]
-    }
-    post_kwargs = {"json": payload}
-    if WEBHOOK_NAME:
-        post_kwargs["json"].update({"username": WEBHOOK_NAME})
-    if WEBHOOK_AVATAR:
-        post_kwargs["json"].update({"avatar_url": WEBHOOK_AVATAR})
-
-    try:
-        r = requests.post(WEBHOOK_URL, **post_kwargs)
-        r.raise_for_status()
-        message_id = r.json().get("id")
-        return True
-    except Exception as e:
-        log("Failed to send initial embed: " + str(e))
-        return False
-
-def patch_embeds(found_count, checked_count, last_user, status, page_idx=0):
-    global message_id
-    if not message_id:
-        return
+def send_embed(found_count, checked_count, last_user, status, page_idx=0):
+    """Sends a new Discord embed with current scan status."""
     bar = make_progress_bar(found_count, NAMES_TO_FIND, size=20)
     with found_lock:
         total_found = len(found_usernames)
@@ -136,35 +109,15 @@ def patch_embeds(found_count, checked_count, last_user, status, page_idx=0):
          "description": desc,
          "color": 0x2ecc71}
     ]
-
-    url = WEBHOOK_URL.rstrip("/") + f"/messages/{message_id}"
-    try:
-        requests.patch(url,json={"embeds":embeds})
-    except Exception as e:
-        log("Error patching embeds: " + str(e))
-
-def upload_logs():
-    files_payload = {}
-    if os.path.exists(VALID_FILE):
-        files_payload["valid.txt"] = open(VALID_FILE,"rb")
-    if os.path.exists(LOG_FILE):
-        files_payload["scan_log.txt"] = open(LOG_FILE,"rb")
-    if not files_payload:
-        return
-    post_kwargs = {"files": files_payload,"data":{"content":"📁 Scan finished — logs attached."}}
+    payload = {"embeds": embeds}
     if WEBHOOK_NAME:
-        post_kwargs["data"]["username"] = WEBHOOK_NAME
+        payload["username"] = WEBHOOK_NAME
     if WEBHOOK_AVATAR:
-        post_kwargs["data"]["avatar_url"] = WEBHOOK_AVATAR
+        payload["avatar_url"] = WEBHOOK_AVATAR
     try:
-        requests.post(WEBHOOK_URL, **post_kwargs)
-        log("Logs uploaded.")
+        requests.post(WEBHOOK_URL, json=payload)
     except Exception as e:
-        log("Failed to upload logs: "+str(e))
-    finally:
-        for f in list(files_payload.values()):
-            try: f.close()
-            except: pass
+        log("Error sending embed: " + str(e))
 
 # =========================
 # ====== WORKER THREAD ====
@@ -191,12 +144,12 @@ def worker_thread(thread_id):
             last_status = "available"
             log(f"[FOUND] {username}")
 
-            # PATCH EMBED IMMEDIATELY
+            # SEND NEW EMBED IMMEDIATELY
             with found_lock:
                 fcount = len(found_usernames)
             with checked_lock:
                 ccount = checked_counter
-            patch_embeds(fcount, ccount, username, "available", page_idx=current_page_index)
+            send_embed(fcount, ccount, username, "available", page_idx=current_page_index)
 
         elif code is None:
             last_status = "network-error"
@@ -220,12 +173,12 @@ def dashboard_loop():
             pages = max(1, math.ceil(total_found/PAGE_SIZE))
         current_page_index = (current_page_index + 1) % pages if pages>0 else 0
         now = time.time()
-        if now-last_edit_time >= EMBED_UPDATE_INTERVAL:
+        if now - last_edit_time >= 5:  # send a page rotation embed every 5 sec
             with found_lock: fcount = len(found_usernames)
             with checked_lock: ccount = checked_counter
-            patch_embeds(fcount, ccount, last_username if last_username else "-", last_status if last_status else "starting", page_idx=current_page_index)
+            send_embed(fcount, ccount, last_username if last_username else "-", last_status if last_status else "starting", page_idx=current_page_index)
             last_edit_time = now
-        time.sleep(EMBED_UPDATE_INTERVAL/2)
+        time.sleep(1)
 
 # =========================
 # ====== START SCAN ======
@@ -233,32 +186,59 @@ def dashboard_loop():
 def start_scan():
     if stop_event.is_set():
         stop_event.clear()
-    for f in [VALID_FILE,LOG_FILE]:
+    for f in [VALID_FILE, LOG_FILE]:
         if os.path.exists(f): os.remove(f)
     log("Scan starting.")
-    send_initial_embeds()
-    threading.Thread(target=dashboard_loop,daemon=True).start()
+
+    threading.Thread(target=dashboard_loop, daemon=True).start()
     with ThreadPoolExecutor(max_workers=WORKER_THREADS) as executor:
-        futures = [executor.submit(worker_thread,i) for i in range(WORKER_THREADS)]
+        futures = [executor.submit(worker_thread, i) for i in range(WORKER_THREADS)]
         try:
             while not stop_event.is_set():
                 with found_lock:
-                    if len(found_usernames)>=NAMES_TO_FIND:
+                    if len(found_usernames) >= NAMES_TO_FIND:
                         break
                 time.sleep(0.25)
         except KeyboardInterrupt:
             stop_event.set()
         stop_event.set()
         time.sleep(0.5)
-    patch_embeds(len(found_usernames), checked_counter, last_username if last_username else "-", "complete", page_idx=0)
+
+    # final embed
+    send_embed(len(found_usernames), checked_counter, last_username if last_username else "-", "complete", page_idx=0)
     upload_logs()
     log("Scan finished.")
+
+# =========================
+# ====== LOG UPLOAD =======
+# =========================
+def upload_logs():
+    files_payload = {}
+    if os.path.exists(VALID_FILE):
+        files_payload["valid.txt"] = open(VALID_FILE,"rb")
+    if os.path.exists(LOG_FILE):
+        files_payload["scan_log.txt"] = open(LOG_FILE,"rb")
+    if not files_payload:
+        return
+    post_kwargs = {"files": files_payload,"data":{"content":"📁 Scan finished — logs attached."}}
+    if WEBHOOK_NAME:
+        post_kwargs["data"]["username"] = WEBHOOK_NAME
+    if WEBHOOK_AVATAR:
+        post_kwargs["data"]["avatar_url"] = WEBHOOK_AVATAR
+    try:
+        requests.post(WEBHOOK_URL, **post_kwargs)
+        log("Logs uploaded.")
+    except Exception as e:
+        log("Failed to upload logs: "+str(e))
+    finally:
+        for f in list(files_payload.values()):
+            try: f.close()
+            except: pass
 
 # =========================
 # ====== ENTRY POINT ======
 # =========================
 if __name__=="__main__":
-    if not WEBHOOK_URL or "YOUR_WEBHOOK_URL_HERE" in WEBHOOK_URL:
+    if not WEBHOOK_URL or "YOUR_WEBHOOK_HERE" in WEBHOOK_URL:
         print("ERROR: Please set WEBHOOK_URL before running.")
     else:
-        start_scan()
